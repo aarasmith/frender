@@ -175,6 +175,31 @@ def test_setup_environment_filters(tmp_path):
     assert "shout" in env.filters
     assert callable(env.filters["shout"])
 
+def test_setup_environment_filters_recursive(tmp_path):
+    """Test that Python filters in subdirectories of filters-dir are also loaded."""
+    filters_dir = tmp_path / "filters"
+    subdir = filters_dir / "sub"
+    subdir.mkdir(parents=True)
+
+    # Create a Python filter in subdir
+    filter_file = subdir / "excite.py"
+    filter_file.write_text(
+        "def excite(text):\n"
+        "    return text + '!!!'\n"
+    )
+
+    # Dummy template
+    template_file = tmp_path / "template.j2"
+    template_file.write_text("{{ 'wow' | excite }}")
+
+    env = setup_environment(template_file, filters_dir=filters_dir)
+    tpl = env.get_template("template.j2")
+    rendered = tpl.render()
+    assert rendered == "wow!!!"
+    assert "excite" in env.filters
+    assert callable(env.filters["excite"])
+
+
 # ---------------------------
 # Integration Rendering Tests
 # ---------------------------
