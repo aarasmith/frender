@@ -2,40 +2,40 @@
 
 A command-line tool to render Jinja2 templates with environment variables.
 
-## Usage
-```
-python render.py [options] [output_dir]
-```
 
 ## Arguments
-| Argument   | Type     | Description                                                 |
-| ---------- | -------- | ----------------------------------------------------------- |
-| output_dir | Optional | Directory to write rendered files. Omit to print to stdout. |
-
+| Argument   | Type     | Description                                                                 |
+| ---------- | -------- | --------------------------------------------------------------------------- |
+| input_file | Optional | Single template file to render (positional argument).                       |
 
 ## Options
-| Flag               | Type        | Default  | Description                                                           |
-| ------------------ | ----------- | -------- | --------------------------------------------------------------------- |
-| `-f, --file`       | `str`       | `None`   | Render a single template file.                                        |
-| `-F, --files`      | `list[str]` | `None`   | Render multiple template files.                                       |
-| `-l, --file-list`  | `str`       | `None`   | Path to a file containing list of templates to render (one per line). |
-| `-d, --dir`        | `str`       | `None`   | Render all files in a directory.                                      |
-| `-r, --recursive`  | `bool`      | `False`  | Recurse into subdirectories when using `--dir`.                       |
-| `output_dir`       | `str`       | `stdout` | Directory to write rendered files. Omit to print to stdout.           |
-| `-ow, --overwrite` | `bool`      | `False`  | Overwrite original files instead of writing to `output_dir`.          |
-| `--env-file`       | `str`       | `.env`   | Path to `.env` file to load environment variables from.               |
-| `--templates-dir`  | `list[str]` | `None`   | Optional directory or directories with shared templates/partials.     |
+| Flag               | Type        | Default  | Description                                                             |
+| ------------------ | ----------- | -------- | ----------------------------------------------------------------------- |
+| `-l, --list`       | `str`       | `None`   | Comma-separated list of template files to render (e.g. `file1,file2`).  |
+| `-f, --file-list`  | `str`       | `None`   | Path to a file containing a list of templates to render (one per line). |
+| `-d, --dir`        | `str`       | `None`   | Render all files in a directory.                                        |
+| `-r, --recursive`  | `bool`      | `False`  | Recurse into subdirectories when using `--dir`.                         |
+| `-o, --output`     | `str`       | `stdout` | Directory to write rendered files. Omit to print to stdout.             |
+| `-ow, --overwrite` | `bool`      | `False`  | Overwrite original files instead of writing to `--output`.              |
+| `--env-file`       | `str`       | `.env`   | Path to a config file (`.toml`, `.json`, `.yaml/.yml`, or `.env`).      |
+| `--templates-dir`  | `list[str]` | `None`   | Optional directory or directories with shared templates/partials.       |
+
 
 ## Examples
 
 Render a single template to stdout:
 ```
-python render.py -f templates/example.j2
+python render.py templates/example.j2
 ```
 
 Render multiple templates to an output directory:
 ```
-python render.py -F templates/a.j2 templates/b.j2 output/
+python render.py -l templates/a.j2 templates/b.j2 -o output/
+```
+
+Render templates from a file list:
+```
+python render.py -f filelist.txt -o output/
 ```
 
 Render all files in a directory recursively and overwrite originals:
@@ -43,7 +43,7 @@ Render all files in a directory recursively and overwrite originals:
 python render.py -d templates/ -r -ow
 ```
 
-Use a custom .env file and template directory:
+Use a custom config file (TOML, YAML, JSON, or .env) and template directory:
 ```
-python render.py -f templates/config.j2 --env-file .env.production --templates-dir templates/partials
+python render.py templates/config.j2 --env-file config.toml --templates-dir templates/partials
 ```
