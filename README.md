@@ -10,16 +10,18 @@ A command-line tool to render Jinja2 templated files with context variables.
 | input_file | Optional | Single template file to render (positional argument).                       |
 
 ## Options
-| Flag               | Type        | Default  | Description                                                             |
-| ------------------ | ----------- | -------- | ----------------------------------------------------------------------- |
-| `-l, --list`       | `str`       | `None`   | Comma-separated list of template files to render (e.g. `file1,file2`).  |
-| `-f, --file-list`  | `str`       | `None`   | Path to a file containing a list of templates to render (one per line). |
-| `-d, --dir`        | `str`       | `None`   | Render all files in a directory.                                        |
-| `-r, --recursive`  | `bool`      | `False`  | Recurse into subdirectories when using `--dir`.                         |
-| `-o, --output`     | `str`       | `stdout` | Directory to write rendered files. Omit to print to stdout.             |
-| `-ow, --overwrite` | `bool`      | `False`  | Overwrite original files instead of writing to `--output`.              |
-| `--env-file`       | `str`       | `.env`   | Path to a config file (`.toml`, `.json`, `.yaml/.yml`, or `.env`).      |
-| `--templates-dir`  | `list[str]` | `None`   | Optional directory or directories with shared templates/partials.       |
+| Flag               | Type   | Default  | Description                                                                                |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------ |
+| `-l, --list`       | `str`  | `None`   | Comma-separated list of template files to render (e.g. `file1,file2`).                     |
+| `-f, --file-list`  | `str`  | `None`   | Path to a file containing a list of templates to render (one per line).                    |
+| `-d, --dir`        | `str`  | `None`   | Render all files in a directory.                                                           |
+| `-r, --recursive`  | `bool` | `False`  | Recurse into subdirectories when using `--dir`.                                            |
+| `-o, --output`     | `str`  | `stdout` | Directory to write rendered files. Omit to print to stdout.                                |
+| `-ow, --overwrite` | `bool` | `False`  | Overwrite original files instead of writing to `--output`.                                 |
+| `--env-file`       | `str`  | `.env`   | Path to a config file (`.toml`, `.json`, `.yaml/.yml`, or `.env`).                         |
+| `--macros-dir`     | `str`  | `None`   | Directory containing Jinja macros to register globally for all templates.                  |
+| `--filters-dir`    | `str`  | `None`   | Directory containing Python files with functions to register as Jinja filters and globals. |
+
 
 
 ## Examples
