@@ -2,7 +2,7 @@
 
 A command-line tool to render Jinja2 templated files with context variables.
 
-![Tests Status](https://gitea.example.com/myuser/myrepo/actions/workflows/test.yml/badge.svg)
+![Tests Status](https://git.arasmith.org/admin/frender/actions/workflows/test.yaml/badge.svg)
 
 ## Arguments
 | Argument   | Type     | Description                                                                 |
