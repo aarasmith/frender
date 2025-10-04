@@ -2,44 +2,77 @@
 import argparse
 import os
 import sys
-import json
 from pathlib import Path
-import tomllib
 import jinja2
-import yaml
 from dotenv import dotenv_values
 
 class RenderError(Exception):
     """Custom exception for template rendering errors."""
     pass
 
+# ---------------------------
+# Context Loaders
+# ---------------------------
 
-def denv(ctx, default=""):
-    """Return environment variable value, or default."""
-    return os.environ.get(ctx, default)
+def load_env_file(env_file: Path) -> dict:
+    """Load dotenv-style file (key=value)."""
+    return dotenv_values(env_file)
 
+def load_json_file(env_file: Path) -> dict:
+    """Load JSON config."""
+    import json
+    with open(env_file, "r") as f:
+        return json.load(f) or {}
+
+def load_yaml_file(env_file: Path) -> dict:
+    """Load YAML config."""
+    import yaml
+    with open(env_file, "r") as f:
+        return yaml.safe_load(f) or {}
+
+def load_toml_file(env_file: Path) -> dict:
+    """Load TOML config."""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    with open(env_file, "rb") as f:
+        return tomllib.load(f) or {}
+
+def load_ini_file(env_file: Path) -> dict:
+    """Load INI config (sections -> dicts)."""
+    import configparser
+    parser = configparser.ConfigParser()
+    parser.read(env_file)
+    return {section: dict(parser.items(section)) for section in parser.sections()}
 
 def load_context(env_file: Path) -> dict:
-    """Load context variables from env_file (.env, .toml, .yaml/.yml, .json)."""
+    """Dispatch to the appropriate loader based on file extension."""
     if not env_file.exists():
         return {}
 
     suffix = env_file.suffix.lower()
     try:
         if suffix in {".yaml", ".yml"}:
-            with open(env_file, "r") as f:
-                return yaml.safe_load(f) or {}
+            return load_yaml_file(env_file)
         elif suffix == ".json":
-            with open(env_file, "r") as f:
-                return json.load(f) or {}
+            return load_json_file(env_file)
         elif suffix == ".toml":
-            with open(env_file, "rb") as f:
-                return tomllib.load(f) or {}
+            return load_toml_file(env_file)
+        elif suffix == ".ini":
+            return load_ini_file(env_file)
         else:
-            return dotenv_values(env_file)
+            return load_env_file(env_file)
     except Exception as e:
         raise RenderError(f"Failed to load context from {env_file}: {e}")
 
+# ---------------------------
+# Rendering Helpers
+# ---------------------------
+
+def env_var(ctx, default=""):
+    """Return environment variable value, or default."""
+    return os.environ.get(ctx, default)
 
 def render_file(src_path: Path, env: jinja2.Environment, context: dict) -> str:
     """Render a Jinja2 template file with env loader and provided context."""
@@ -48,7 +81,6 @@ def render_file(src_path: Path, env: jinja2.Environment, context: dict) -> str:
         return template.render(**context)
     except Exception as e:
         raise RenderError(f"Failed to render template {src_path}: {e}")
-
 
 def write_rendered(src: Path, rendered: str, dest: Path | None):
     """Write rendered string to dest, or stdout if dest is None."""
@@ -61,7 +93,6 @@ def write_rendered(src: Path, rendered: str, dest: Path | None):
             print(f"Rendered: {src} -> {dest}")
     except Exception as e:
         raise RenderError(f"Failed to write rendered output for {src} -> {dest}: {e}")
-
 
 def collect_files(args) -> list[Path]:
     """Collect files based on CLI args."""
@@ -106,24 +137,62 @@ def collect_files(args) -> list[Path]:
 
     return files
 
+# ---------------------------
+# Environment Setup
+# ---------------------------
+
+def register_macros(env: jinja2.Environment, macros_dir: Path):
+    """
+    Recursively load all .j2 files from macros_dir and register macros globally.
+    """
+    if not macros_dir or not macros_dir.exists():
+        return
+    for f in macros_dir.rglob("*.j2"):
+        try:
+            rel_path = f.relative_to(macros_dir)
+            template = env.get_template(str(rel_path))
+            for name, func in template.module.__dict__.items():
+                if callable(func) and not name.startswith("_"):
+                    env.globals[name] = func
+        except Exception as e:
+            raise RenderError(f"Failed to load macros from {f}: {e}")
+
+def setup_environment(template_file: Path, macros_dir: Path | None = None) -> jinja2.Environment:
+    """
+    Create a Jinja2 Environment for a given template.
+    Automatically adds parent directory of template to search path.
+    Optionally registers macros from macros_dir if provided.
+    """
+    search_paths = [str(template_file.parent)]
+    if macros_dir:
+        search_paths.append(str(macros_dir))
+
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(search_paths))
+    env.filters["env_var"] = env_var
+    env.globals["env_var"] = env_var
+
+    if macros_dir:
+        register_macros(env, macros_dir)
+
+    return env
+
+# ---------------------------
+# Main CLI
+# ---------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Render Jinja2 templates with variables from .env, TOML, YAML, or JSON."
+        description="Render Jinja2 templates with variables from .env, TOML, YAML, JSON, or INI."
     )
     parser.add_argument("input_file", nargs="?", help="Single file to render")
-    parser.add_argument("-l", "--list", help="Comma-separated list of files to render (e.g. file1,file2,file3)")
+    parser.add_argument("-l", "--list", help="Comma-separated list of files to render")
     parser.add_argument("-f", "--file-list", help="File containing list of templates to render (one per line)")
     parser.add_argument("-d", "--dir", help="Render all files in a directory")
     parser.add_argument("-r", "--recursive", action="store_true", help="Recurse into directories when using --dir")
-    parser.add_argument("-o", "--output", help="Output directory to write rendered files. Omit to print to stdout.")
-    parser.add_argument("-ow", "--overwrite", action="store_true",
-                        help="Overwrite files in place instead of writing to --output")
-    parser.add_argument("--env-file", default=".env",
-                        help="Path to config file (.env, .toml, .yaml/.yml, or .json). Default: .env")
-    parser.add_argument("--templates-dir", nargs="+",
-                        help="Optional directory (or directories) with shared templates/partials"
-                        )
+    parser.add_argument("-o", "--output", help="Output directory to write rendered files")
+    parser.add_argument("-ow", "--overwrite", action="store_true", help="Overwrite files in place")
+    parser.add_argument("--env-file", default=".env", help="Path to config file (.env, .toml, .yaml/.yml, .json, .ini)")
+    parser.add_argument("--macros-dir", help="Directory containing Jinja macros to register globally")
 
     args = parser.parse_args()
 
@@ -134,16 +203,10 @@ def main():
             parser.error("Rendering multiple files requires --overwrite or --output.")
 
         context = load_context(Path(args.env_file))
-
-        # Build Jinja environment
-        search_paths = []
-        if args.templates_dir:
-            search_paths.extend(args.templates_dir)
-        search_paths.extend([str(f.parent) for f in files])
-        env = jinja2.Environment(loader=jinja2.FileSystemLoader(search_paths))
-        env.filters["denv"] = denv
+        macros_dir = Path(args.macros_dir) if args.macros_dir else None
 
         for src in files:
+            env = setup_environment(src, macros_dir=macros_dir)
             rendered = render_file(src.name, env, context)
 
             if args.overwrite:
@@ -161,7 +224,6 @@ def main():
     except Exception as e:
         print(f"[UNEXPECTED ERROR] {e}", file=sys.stderr)
         sys.exit(2)
-
 
 if __name__ == "__main__":
     main()
