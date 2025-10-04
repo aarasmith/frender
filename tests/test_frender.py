@@ -152,6 +152,28 @@ def test_setup_environment_macros_recursive(tmp_path):
     assert "bye" in env.globals
     assert env.globals["bye"]("Alice") == "Bye Alice"
 
+def test_setup_environment_filters(tmp_path):
+    """Test that Python filters in filters-dir are loaded into Jinja environment."""
+    filters_dir = tmp_path / "filters"
+    filters_dir.mkdir()
+
+    # Create a Python filter
+    filter_file = filters_dir / "custom_filter.py"
+    filter_file.write_text(
+        "def shout(text):\n"
+        "    return text.upper()\n"
+    )
+
+    # Dummy template
+    template_file = tmp_path / "template.j2"
+    template_file.write_text("{{ 'hello' | shout }}")
+
+    env = setup_environment(template_file, filters_dir=filters_dir)
+    tpl = env.get_template("template.j2")
+    rendered = tpl.render()
+    assert rendered == "HELLO"
+    assert "shout" in env.filters
+    assert callable(env.filters["shout"])
 
 # ---------------------------
 # Integration Rendering Tests

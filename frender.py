@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 import jinja2
 from dotenv import dotenv_values
+import importlib.util
 
 class RenderError(Exception):
     """Custom exception for template rendering errors."""
@@ -141,40 +142,75 @@ def collect_files(args) -> list[Path]:
 # Environment Setup
 # ---------------------------
 
+def register_filters(env: jinja2.Environment, filters_root: Path):
+    """Recursively load Python files from filters_root and register callables as Jinja filters."""
+    import importlib.util
+
+    if not filters_root.exists():
+        return
+    for f in filters_root.rglob("*.py"):
+        try:
+            spec = importlib.util.spec_from_file_location(f.stem, f)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            for name in dir(module):
+                func = getattr(module, name)
+                if callable(func) and not name.startswith("_"):
+                    env.filters[name] = func
+                    env.globals[name] = func
+        except Exception as e:
+            raise RenderError(f"Failed to load filters from {f}: {e}")
+
+
 def register_macros(env: jinja2.Environment, macros_dir: Path):
     """
     Recursively load all .j2 files from macros_dir and register macros globally.
+    The macros_dir is added temporarily to the loader search path to resolve templates.
     """
     if not macros_dir or not macros_dir.exists():
         return
-    for f in macros_dir.rglob("*.j2"):
-        try:
-            rel_path = f.relative_to(macros_dir)
-            template = env.get_template(str(rel_path))
-            for name, func in template.module.__dict__.items():
-                if callable(func) and not name.startswith("_"):
-                    env.globals[name] = func
-        except Exception as e:
-            raise RenderError(f"Failed to load macros from {f}: {e}")
 
-def setup_environment(template_file: Path, macros_dir: Path | None = None) -> jinja2.Environment:
-    """
-    Create a Jinja2 Environment for a given template.
-    Automatically adds parent directory of template to search path.
-    Optionally registers macros from macros_dir if provided.
-    """
-    search_paths = [str(template_file.parent)]
-    if macros_dir:
-        search_paths.append(str(macros_dir))
+    # Add macros_dir to loader search paths temporarily
+    if isinstance(env.loader, jinja2.FileSystemLoader):
+        paths = list(env.loader.searchpath)
+        env.loader.searchpath.append(str(macros_dir))
+    else:
+        paths = []
 
-    env = jinja2.Environment(loader=jinja2.FileSystemLoader(search_paths))
+    try:
+        for f in macros_dir.rglob("*.j2"):
+            try:
+                rel_path = f.relative_to(macros_dir)
+                template = env.get_template(str(rel_path))
+                for name, func in template.module.__dict__.items():
+                    if callable(func) and not name.startswith("_"):
+                        env.globals[name] = func
+            except Exception as e:
+                raise RenderError(f"Failed to load macros from {f}: {e}")
+    finally:
+        # Restore original search paths
+        if paths:
+            env.loader.searchpath = paths
+
+
+def setup_environment(template_file: Path, macros_dir: Path | None = None, filters_dir: Path | None = None) -> jinja2.Environment:
+    """
+    Create a Jinja2 Environment with:
+    - template_file.parent as loader path
+    - optional macros registered from macros_dir
+    - optional filters registered from filters_dir
+    """
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader([str(template_file.parent)]))
     env.filters["env_var"] = env_var
     env.globals["env_var"] = env_var
 
     if macros_dir:
         register_macros(env, macros_dir)
+    if filters_dir:
+        register_filters(env, filters_dir)
 
     return env
+
 
 # ---------------------------
 # Main CLI
@@ -193,6 +229,7 @@ def main():
     parser.add_argument("-ow", "--overwrite", action="store_true", help="Overwrite files in place")
     parser.add_argument("--env-file", default=".env", help="Path to config file (.env, .toml, .yaml/.yml, .json, .ini)")
     parser.add_argument("--macros-dir", help="Directory containing Jinja macros to register globally")
+    parser.add_argument("--filters-dir", help="Directory containing Python files to register as Jinja filters/globals")
 
     args = parser.parse_args()
 
@@ -204,9 +241,10 @@ def main():
 
         context = load_context(Path(args.env_file))
         macros_dir = Path(args.macros_dir) if args.macros_dir else None
+        filters_dir = Path(args.filters_dir) if args.filters_dir else None
 
         for src in files:
-            env = setup_environment(src, macros_dir=macros_dir)
+            env = setup_environment(src, macros_dir=macros_dir, filters_dir=filters_dir)
             rendered = render_file(src.name, env, context)
 
             if args.overwrite:
