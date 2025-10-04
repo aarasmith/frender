@@ -1,7 +1,8 @@
 # Jinja2 Environment Renderer CLI
 
-A command-line tool to render Jinja2 templates with environment variables.
+A command-line tool to render Jinja2 templated files with context variables.
 
+![Tests Status](https://gitea.example.com/myuser/myrepo/actions/workflows/test.yml/badge.svg)
 
 ## Arguments
 | Argument   | Type     | Description                                                                 |
