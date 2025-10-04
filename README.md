@@ -1,8 +1,8 @@
 # Jinja2 Environment Renderer CLI
 
-A command-line tool to render Jinja2 templated files with context variables.
-
 ![Tests Status](https://git.arasmith.org/admin/frender/actions/workflows/test.yaml/badge.svg)
+
+A command-line tool to render Jinja2 templated files with context variables.
 
 ## Arguments
 | Argument   | Type     | Description                                                                 |
