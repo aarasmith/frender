@@ -6,6 +6,7 @@ from pathlib import Path
 import jinja2
 from dotenv import dotenv_values
 import importlib.util
+import fnmatch
 
 class RenderError(Exception):
     """Custom exception for template rendering errors."""
@@ -95,6 +96,22 @@ def write_rendered(src: Path, rendered: str, dest: Path | None):
     except Exception as e:
         raise RenderError(f"Failed to write rendered output for {src} -> {dest}: {e}")
 
+# ---------------------------
+# File collection
+# ---------------------------
+
+def get_exclude_patterns(args) -> list[Path]:
+    exclude_patterns = []
+    if args.exclude:
+        exclude_patterns = [Path(x.strip()) for x in args.exclude.split(",") if x.strip()]
+    return exclude_patterns
+
+def is_excluded(path: Path, exclude_patterns: list[Path]) -> bool:
+    for pattern in exclude_patterns:
+        if fnmatch.fnmatch(path.name, pattern):
+            return True
+    return False
+
 def collect_files(args) -> list[Path]:
     """Collect files based on CLI args."""
     files = []
@@ -128,10 +145,13 @@ def collect_files(args) -> list[Path]:
         dir_path = Path(args.dir)
         if not dir_path.is_dir():
             raise RenderError(f"Directory not found: {dir_path}")
+
+        exclude_patterns = get_exclude_patterns(args)
+        
         if args.recursive:
-            files.extend(p for p in dir_path.rglob("*") if p.is_file())
+            files.extend(p for p in dir_path.rglob("*") if p.is_file() and not is_excluded(p, exclude_patterns))
         else:
-            files.extend(p for p in dir_path.glob("*") if p.is_file())
+            files.extend(p for p in dir_path.glob("*") if p.is_file() and not is_excluded(p, exclude_patterns))
 
     if not files:
         raise RenderError("No input files collected. Use -l, -f, -d, or input_file.")
@@ -211,12 +231,69 @@ def setup_environment(template_file: Path, macros_dir: Path | None = None, filte
 
     return env
 
+# ---------------------------
+# Config setup
+# ---------------------------
+
+def run_config_setup():
+    config_dir = Path.home() / ".frender"
+    config_dir.mkdir(exist_ok=True)
+    config_path = config_dir / "config"
+
+    print("frender configuration setup")
+    env_file = input("Path to your default env file (or leave blank): ").strip()
+    macros_dir = input("Path to your macros directory (or leave blank): ").strip()
+    filters_dir = input("Path to your filters directory (or leave blank): ").strip()
+
+    # Expand '~', convert relative to absolute paths
+    def expand(path):
+        if not path:
+            return ""
+        return str((Path(path).expanduser().resolve()))
+
+    lines = [
+        f"ENV_FILE={expand(env_file)}",
+        f"MACROS_DIR={expand(macros_dir)}",
+        f"FILTERS_DIR={expand(filters_dir)}"
+    ]
+
+    config_path.write_text("\n".join(lines))
+    print(f"Configuration saved to {config_path}")
+
+def load_frender_config() -> dict:
+    """Load the ~/.frender/config file if it exists."""
+    config_path = Path.home() / ".frender" / "config"
+    if not config_path.exists():
+        return {}
+    return dotenv_values(config_path)
+
+# ---------------------------
+# Input validation
+# ---------------------------
+
+def validate_input_sources(args, parser):
+    """Ensure only one input source is provided."""
+    sources = [
+        bool(args.input_file),
+        bool(args.list),
+        bool(args.file_list),
+        bool(args.dir),
+    ]
+    if sum(sources) > 1:
+        parser.error(
+            "You can only provide one of input_file, -l/--list, -f/--file-list, or -d/--dir"
+        )
+    elif sum(sources) == 0:
+        parser.error(
+            "You must provide at least one input source: input_file, -l/--list, -f/--file-list, or -d/--dir"
+        )
 
 # ---------------------------
 # Main CLI
 # ---------------------------
 
 def main():
+
     parser = argparse.ArgumentParser(
         description="Render Jinja2 templates with variables from .env, TOML, YAML, JSON, or INI."
     )
@@ -225,13 +302,24 @@ def main():
     parser.add_argument("-f", "--file-list", help="File containing list of templates to render (one per line)")
     parser.add_argument("-d", "--dir", help="Render all files in a directory")
     parser.add_argument("-r", "--recursive", action="store_true", help="Recurse into directories when using --dir")
+    parser.add_argument("-x", "--exclude", help="list of filename patterns to exclude when using --dir (supports wildcards, e.g. '*.bak,*.tmp,temp_*')")
     parser.add_argument("-o", "--output", help="Output directory to write rendered files")
+    parser.add_argument("-sd", "--single-dir", action="store_true", help="Don't preserve full paths when writing to output directory")
     parser.add_argument("-ow", "--overwrite", action="store_true", help="Overwrite files in place")
     parser.add_argument("--env-file", default=".env", help="Path to config file (.env, .toml, .yaml/.yml, .json, .ini)")
     parser.add_argument("--macros-dir", help="Directory containing Jinja macros to register globally")
     parser.add_argument("--filters-dir", help="Directory containing Python files to register as Jinja filters/globals")
 
     args = parser.parse_args()
+
+    validate_input_sources(args, parser)
+
+    config = load_frender_config()
+    
+    if args.env_file == ".env": # .env is default
+        args.env_file = config.get("ENV_FILE") or ".env"
+    args.macros_dir = args.macros_dir or config.get("MACROS_DIR")
+    args.filters_dir = args.filters_dir or config.get("FILTERS_DIR")
 
     try:
         files = collect_files(args)
@@ -247,12 +335,28 @@ def main():
             env = setup_environment(src, macros_dir=macros_dir, filters_dir=filters_dir)
             rendered = render_file(src.name, env, context)
 
+            #in place
             if args.overwrite:
                 write_rendered(src, rendered, src)
+            
+            #target directory
             elif args.output:
-                rel_path = src if not args.dir else src.relative_to(Path(args.dir))
-                dest = Path(args.output) / rel_path
+                
+                flatten = False
+                if args.input_file or args.list:
+                    flatten = True
+                elif args.file_list or args.dir:
+                    flatten = args.single_dir
+
+                if flatten:
+                    dest = Path(args.output) / src.name
+                else:
+                    rel_path = src if not args.dir else src.relative_to(Path(args.dir))
+                    dest = Path(args.output) / rel_path
+                
                 write_rendered(src, rendered, dest)
+            
+            # stdout
             else:
                 write_rendered(src, rendered, None)
 
