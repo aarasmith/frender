@@ -115,6 +115,7 @@ def test_collect_files_dir_recursive(tmp_path):
         dir=str(tmp_path)
         recursive=True
         input_file=None
+        exclude=None
     files = collect_files(Args)
     assert f1 in files and f2 in files
 
