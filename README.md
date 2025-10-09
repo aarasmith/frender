@@ -2,7 +2,7 @@
 
 ![Tests Status](https://git.arasmith.org/admin/frender/actions/workflows/test.yaml/badge.svg)
 
-A command-line tool to render Jinja2 templated files with context variables.
+A command-line tool to render Jinja2 templated files with context variables, custom macros, and custom filters.
 
 ## Arguments
 | Argument   | Type     | Description                                                                                    |
@@ -28,27 +28,81 @@ A command-line tool to render Jinja2 templated files with context variables.
 
 ## Examples
 
-Render a single template to stdout:
+### Render a single template to stdout
+This renders `example.j2` using variables in `.env` (if exists) by default:
 ```
 frender templates/example.j2
 ```
+Any other options require either a specified ouput or the --overwrite (-ow) flag
 
-Render multiple templates to an output directory:
+### Render a single template in place:
+This overwrites the input file with the rendered result:
 ```
-frender -l templates/a.j2 templates/b.j2 -o output/
-```
-
-Render templates from a file list:
-```
-python render.py -f filelist.txt -o output/
+frender templates/example.j2 -ow
 ```
 
-Render all files in a directory recursively and overwrite originals:
+### Render multiple templates from a list (flattened) to an output directory
+Use `-l` / `--list` to specify multiple templates. Output files are written directly to the target directory (e.g. `templates/subdir/a.j2` -> `output/a.j2`):
 ```
-python render.py -d templates/ -r -ow
+frender -l templates/a.j2,templates/b.j2 -o output
 ```
 
-Use a custom config file (TOML, YAML, JSON, or .env) and template directory:
+### Render templates listed in a file
+Each line of `filelist.txt` should contain a path to a template. File paths/hierarchy will be respected (e.g. `templates/subdir/template.yml` -> `output/subdir/template.yml`):
 ```
-python render.py templates/config.j2 --env-file config.toml --templates-dir templates/partials
+frender -f filelist.txt -o output
+```
+
+### Flattening output when using -f or -d
+When rendering multiple files from a file list (-f) or directory (-d), you can control whether subdirectories are preserved:
+```
+frender -f filelist.txt -o output/ --single-dir
+```
+
+### Render all files in a directory
+Render templates in a directory:
+```
+frender -d templates/ -o output/
+```
+Recursively render templates in a directory and all subdirectories in place using the --recursive (-r) flag:
+```
+frender -d templates/ -r -ow
+```
+
+### Exclude specific files when rendering a directory
+Use wildcards to exclude files from rendering:
+```
+frender -d templates/ -o output/ -x "*.bak,*.tmp,temp_*"
+```
+
+### Use a custom environment/config file
+Load variables from JSON, TOML, YAML, or dotenv-style files:
+```
+frender templates/config.j2 --env-file config.toml
+frender templates/config.j2 --env-file config.yaml (or .yml)
+frender templates/config.j2 --env-file .env
+frender templates/config.j2 --env-file config.json
+```
+
+### Use macros or custom Jinja filters
+Macros and filters can be registered globally from directories:
+```
+# Use macros
+frender templates/macro_example.j2 -o output/ --macros-dir macros/
+
+# Use custom filters
+frender templates/filter_example.j2 -o output/ --filters-dir filters/
+```
+
+### Configure default env-file, macros-dir, and filters-dir
+You can configure default settings by running:
+```
+frender config
+```
+This will create `~/.frender/config` and be used for subsequent runs
+
+### Combine overrides with a config file
+CLI arguments always take precedence over the configuration file:
+```
+frender templates/example.j2 -o output/ --env-file custom.env
 ```
