@@ -265,6 +265,7 @@ def load_frender_config() -> dict:
     config_path = Path.home() / ".frender" / "config"
     if not config_path.exists():
         return {}
+    print(f"Using configuration at: {config_path}")
     return dotenv_values(config_path)
 
 # ---------------------------
@@ -306,7 +307,7 @@ def main():
     parser.add_argument("-o", "--output", help="Output directory to write rendered files")
     parser.add_argument("-sd", "--single-dir", action="store_true", help="Don't preserve full paths when writing to output directory")
     parser.add_argument("-ow", "--overwrite", action="store_true", help="Overwrite files in place")
-    parser.add_argument("--env-file", default=".env", help="Path to config file (.env, .toml, .yaml/.yml, .json, .ini)")
+    parser.add_argument("--env-file", help="Path to config file (.env, .toml, .yaml/.yml, .json, .ini)")
     parser.add_argument("--macros-dir", help="Directory containing Jinja macros to register globally")
     parser.add_argument("--filters-dir", help="Directory containing Python files to register as Jinja filters/globals")
 
@@ -316,8 +317,8 @@ def main():
 
     config = load_frender_config()
     
-    if args.env_file == ".env": # .env is default
-        args.env_file = config.get("ENV_FILE") or ".env"
+    if not args.env_file:
+        args.env_file = config.get("ENV_FILE") or ".env" # .env is default if none supplied
     args.macros_dir = args.macros_dir or config.get("MACROS_DIR")
     args.filters_dir = args.filters_dir or config.get("FILTERS_DIR")
 
