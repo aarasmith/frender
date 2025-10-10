@@ -58,8 +58,8 @@ def test_load_context_dispatch(tmp_path):
         ".ini": "[section]\nkey=value"
     }
     for ext, content in files.items():
-        f = tmp_path / f"file{ext}"
-        f.write_text(content)
+        f = [tmp_path / f"file{ext}"]
+        f[0].write_text(content)
         ctx = load_context(f)
         assert ctx, f"Context for {ext} should not be empty"
 
