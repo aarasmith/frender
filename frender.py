@@ -48,25 +48,34 @@ def load_ini_file(env_file: Path) -> dict:
     parser.read(env_file)
     return {section: dict(parser.items(section)) for section in parser.sections()}
 
-def load_context(env_file: Path) -> dict:
+def load_context(env_files: list[Path]) -> list[dict]:
     """Dispatch to the appropriate loader based on file extension."""
-    if not env_file.exists():
-        return {}
+    loaded_files = []
+    for env_file in env_files:
+        if not env_file.exists():
+            return {}
 
-    suffix = env_file.suffix.lower()
-    try:
-        if suffix in {".yaml", ".yml"}:
-            return load_yaml_file(env_file)
-        elif suffix == ".json":
-            return load_json_file(env_file)
-        elif suffix == ".toml":
-            return load_toml_file(env_file)
-        elif suffix == ".ini":
-            return load_ini_file(env_file)
-        else:
-            return load_env_file(env_file)
-    except Exception as e:
-        raise RenderError(f"Failed to load context from {env_file}: {e}")
+        suffix = env_file.suffix.lower()
+        try:
+            if suffix in {".yaml", ".yml"}:
+                loaded_files.append(load_yaml_file(env_file))
+            elif suffix == ".json":
+                loaded_files.append(load_json_file(env_file))
+            elif suffix == ".toml":
+                loaded_files.append(load_toml_file(env_file))
+            elif suffix == ".ini":
+                loaded_files.append(load_ini_file(env_file))
+            else:
+                loaded_files.append(load_env_file(env_file))
+        except Exception as e:
+            raise RenderError(f"Failed to load context from {env_file}: {e}")
+    return loaded_files
+
+def context_merger(context: list[dict]):
+    merged_context = {}
+    for d in context:
+        merged_context |= d
+    return merged_context
 
 # ---------------------------
 # Rendering Helpers
@@ -307,7 +316,7 @@ def main():
     parser.add_argument("-o", "--output", help="Output directory to write rendered files")
     parser.add_argument("-sd", "--single-dir", action="store_true", help="Don't preserve full paths when writing to output directory")
     parser.add_argument("-ow", "--overwrite", action="store_true", help="Overwrite files in place")
-    parser.add_argument("--env-file", help="Path to config file (.env, .toml, .yaml/.yml, .json, .ini)")
+    parser.add_argument("--env-file", action="append", help="Path to config file (.env, .toml, .yaml/.yml, .json, .ini) to load (can be specified multiple times)")
     parser.add_argument("--macros-dir", help="Directory containing Jinja macros to register globally")
     parser.add_argument("--filters-dir", help="Directory containing Python files to register as Jinja filters/globals")
 
@@ -317,8 +326,9 @@ def main():
 
     config = load_frender_config()
     
-    if not args.env_file:
-        args.env_file = config.get("ENV_FILE") or ".env" # .env is default if none supplied
+    if not args.env_file and config.get("ENV_FILE"):
+        args.env_file = [config.get("ENV_FILE")]
+    args.env_file = args.env_file or [".env"]
     args.macros_dir = args.macros_dir or config.get("MACROS_DIR")
     args.filters_dir = args.filters_dir or config.get("FILTERS_DIR")
 
@@ -328,7 +338,8 @@ def main():
         if not args.output and not args.overwrite and len(files) > 1:
             parser.error("Rendering multiple files requires --overwrite or --output.")
 
-        context = load_context(Path(args.env_file))
+        context = load_context([Path(file) for file in args.env_file])
+        context = context_merger(context)
         macros_dir = Path(args.macros_dir) if args.macros_dir else None
         filters_dir = Path(args.filters_dir) if args.filters_dir else None
 
