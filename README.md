@@ -82,6 +82,7 @@ frender templates/config.j2 --env-file config.toml
 frender templates/config.j2 --env-file config.yaml (or .yml)
 frender templates/config.j2 --env-file .env
 frender templates/config.j2 --env-file config.json
+frender templates/config.j2 --env-file config.json --env-file .env --env-file config.toml
 ```
 
 ### Use macros or custom Jinja filters

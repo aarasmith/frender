@@ -244,4 +244,48 @@ def test_cli_overrides_config(setup_project, monkeypatch, capsys):
     assert (tmp_path / "target_override" / "macro.yaml").read_text().strip() == "I am a macro foo"
     assert (tmp_path / "target_override" / "filter.yaml").read_text().strip() == "{{ ref(foo) }}"
 
+def test_multiple_env_files(setup_project, monkeypatch, capsys):
+    """
+    Verify that multiple --env-file arguments are merged correctly.
+    Later files should override keys from earlier ones.
+    """
+    tmp_path, _, _ = setup_project
+
+    # Create two environment files with overlapping keys
+    (tmp_path / "env1.yaml").write_text(
+        "key1: foo\nkey2: bar\nunique1: only_in_env1\n"
+    )
+    (tmp_path / "env2.yaml").write_text(
+        "key2: baz\nkey3: qux\nunique2: only_in_env2\n"
+    )
+
+    # Template references keys from both files
+    (tmp_path / "source_merge.yaml").write_text(
+        "{{ key1 }}\n{{ key2 }}\n{{ key3 }}\n{{ unique1 }}\n{{ unique2 }}\n"
+    )
+
+    # Run CLI with both env files (order matters!)
+    run_cli(
+        monkeypatch,
+        [
+            "source_merge.yaml",
+            "-o",
+            "target_multi",
+            "--env-file",
+            "env1.yaml",
+            "--env-file",
+            "env2.yaml",
+        ],
+        capsys,
+    )
+
+    rendered = (tmp_path / "target_multi" / "source_merge.yaml").read_text().strip()
+
+    # Expected behavior:
+    # - key1 from env1
+    # - key2 overridden by env2
+    # - key3 from env2
+    # - unique1 from env1
+    # - unique2 from env2
+    assert rendered == "foo\nbaz\nqux\nonly_in_env1\nonly_in_env2"
 
