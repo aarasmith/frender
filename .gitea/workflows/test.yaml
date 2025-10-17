@@ -2,8 +2,8 @@ name: Python Test Workflow
 
 on:
   push:
-    branches:
-      - "**"
+    branches-ignore:
+      - main
   workflow_dispatch:
 
 jobs:
