@@ -22,6 +22,7 @@ A command-line tool to render Jinja2 templated files with context variables, cus
 | `-sd, --single-dir` | `bool` | `False`  | Don’t preserve subdirectory structure when writing to `--output`; all files go into one directory.  |
 | `-ow, --overwrite`  | `bool` | `False`  | Overwrite original files instead of writing to `--output`.                                          |
 | `--env-file`        | `str`  | `.env`   | Path to a config file (`.toml`, `.json`, `.yaml/.yml`, or `.env`).                                  |
+| `--file-var`        | `str`  | `None`   | Inject file contents as a Jinja variable (can be used multiple times) `<VAR_NAME>=<PATH>`.          |
 | `--macros-dir`      | `str`  | `None`   | Directory containing Jinja macros to register globally for all templates.                           |
 | `--filters-dir`     | `str`  | `None`   | Directory containing Python files with functions to register as Jinja filters and globals.          |
 
@@ -84,6 +85,9 @@ frender templates/config.j2 --env-file .env
 frender templates/config.j2 --env-file config.json
 frender templates/config.j2 --env-file config.json --env-file .env --env-file config.toml
 ```
+
+### Inject a file's raw contents as a template variable
+Use --file-var to read the entire contents of a UTF-8 text file and inject it into the Jinja context under a named variable. The file contents are included unchanged and can be referenced directly in the template.
 
 ### Use macros or custom Jinja filters
 Macros and filters can be registered globally from directories:
