@@ -48,6 +48,15 @@ def test_load_ini_file(tmp_path):
     ctx = load_ini_file(f)
     assert ctx["section"]["key"] == "value"
 
+def test_load_vars_parses_name_value_with_spaces():
+    from frender.main import load_vars, RenderError
+    assert load_vars(["title=Hello", "greeting=Hello world"]) == {
+        "title": "Hello",
+        "greeting": "Hello world",
+    }
+    with pytest.raises(RenderError):
+        load_vars(["badformat"])
+
 def test_load_file_vars_reads_utf8_text(tmp_path):
     from frender.main import load_file_vars
 
@@ -145,7 +154,7 @@ def test_setup_environment_macros(tmp_path):
     macro_file.write_text("{% macro greet(name) %}Hello {{ name }}{% endmacro %}")
     
     # setup environment with macros explicitly passed
-    env = setup_environment(template_file=tmp_path / "dummy.j2", macros_dir=macros_dir)
+    env = setup_environment(template_file=tmp_path / "dummy.j2", macro_dirs=[macros_dir])
     
     # check macro is available in globals
     assert "greet" in env.globals
@@ -160,7 +169,7 @@ def test_setup_environment_macros_recursive(tmp_path):
     macro_file = subdir / "submacro.j2"
     macro_file.write_text("{% macro bye(name) %}Bye {{ name }}{% endmacro %}")
     
-    env = setup_environment(template_file=tmp_path / "dummy.j2", macros_dir=macros_dir)
+    env = setup_environment(template_file=tmp_path / "dummy.j2", macro_dirs=[macros_dir])
     
     assert "bye" in env.globals
     assert env.globals["bye"]("Alice") == "Bye Alice"
@@ -181,7 +190,7 @@ def test_setup_environment_filters(tmp_path):
     template_file = tmp_path / "template.j2"
     template_file.write_text("{{ 'hello' | shout }}")
 
-    env = setup_environment(template_file, filters_dir=filters_dir)
+    env = setup_environment(template_file, filter_dirs=[filters_dir])
     tpl = env.get_template("template.j2")
     rendered = tpl.render()
     assert rendered == "HELLO"
@@ -205,7 +214,7 @@ def test_setup_environment_filters_recursive(tmp_path):
     template_file = tmp_path / "template.j2"
     template_file.write_text("{{ 'wow' | excite }}")
 
-    env = setup_environment(template_file, filters_dir=filters_dir)
+    env = setup_environment(template_file, filter_dirs=[filters_dir])
     tpl = env.get_template("template.j2")
     rendered = tpl.render()
     assert rendered == "wow!!!"
