@@ -71,6 +71,24 @@ def load_context(env_files: list[Path]) -> list[dict]:
             raise RenderError(f"Failed to load context from {env_file}: {e}")
     return loaded_files
 
+def load_vars(var_args: list[str]) -> dict[str, str]:
+    """Parse --var NAME=VALUE items into a dict. Value is treated as raw text (UTF-8 str)."""
+    vars_dict: dict[str, str] = {}
+
+    for item in var_args or []:
+        if "=" not in item:
+            raise RenderError(f"--var must be in NAME=VALUE format (got '{item}')")
+    
+        name, value = item.split("=", 1)
+
+        if not name.isidentifier():
+            raise RenderError(f"Invalid variable name for --var: '{name}'")
+    
+        # VALUE is used as-is; quoting is handled by the shell before it reaches us.
+        vars_dict[name] = value
+
+    return vars_dict
+
 def load_file_vars(file_var_args):
     file_vars = {}
 
@@ -357,6 +375,7 @@ def main():
     parser.add_argument("-o", "--output", help="Output directory to write rendered files")
     parser.add_argument("-sd", "--single-dir", action="store_true", help="Don't preserve full paths when writing to output directory")
     parser.add_argument("-ow", "--overwrite", action="store_true", help="Overwrite files in place")
+    parser.add_argument("--var", action="append", metavar="Name=PATH", help="Set a template variable. Supports spaces when quoted. Can be specified multiple times.")
     parser.add_argument("--env-file", action="append", help="Path to config file (.env, .toml, .yaml/.yml, .json, .ini) to load (can be specified multiple times)")
     parser.add_argument("--file-var", action="append", metavar="NAME=PATH", help="Inject file contents as a Jinja variable (can be used multiple times)")
     parser.add_argument("--macros-dir", help="Directory containing Jinja macros to register globally")
@@ -383,6 +402,7 @@ def main():
         context = load_context([Path(file) for file in args.env_file])
         context = context_merger(context)
         context.update(load_file_vars(args.file_var))
+        context.update(load_vars(args.var))
         macros_dir = Path(args.macros_dir) if args.macros_dir else None
         filters_dir = Path(args.filters_dir) if args.filters_dir else None
 

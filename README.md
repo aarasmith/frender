@@ -22,6 +22,7 @@ A command-line tool to render Jinja2 templated files with context variables, cus
 | `-sd, --single-dir` | `bool` | `False`  | Don’t preserve subdirectory structure when writing to `--output`; all files go into one directory.  |
 | `-ow, --overwrite`  | `bool` | `False`  | Overwrite original files instead of writing to `--output`.                                          |
 | `--env-file`        | `str`  | `.env`   | Path to a config file (`.toml`, `.json`, `.yaml/.yml`, or `.env`).                                  |
+| `--var`             | `str`  | `None`   | Set a template var. Supports spaces when quoted. (can be used multiple times) `<VAR_NAME>=<PATH>`.  |
 | `--file-var`        | `str`  | `None`   | Inject file contents as a Jinja variable (can be used multiple times) `<VAR_NAME>=<PATH>`.          |
 | `--macros-dir`      | `str`  | `None`   | Directory containing Jinja macros to register globally for all templates.                           |
 | `--filters-dir`     | `str`  | `None`   | Directory containing Python files with functions to register as Jinja filters and globals.          |
@@ -84,6 +85,14 @@ frender templates/config.j2 --env-file config.yaml (or .yml)
 frender templates/config.j2 --env-file .env
 frender templates/config.j2 --env-file config.json
 frender templates/config.j2 --env-file config.json --env-file .env --env-file config.toml
+```
+
+### Set template variables directly from the command line
+Use --var to define template variables directly on the command line.
+This is useful for small values or strings that don't belong in a config file.
+Variable values may include spaces when quoted.
+```
+frender templates/example.j2 --var env=prod --var title="Hello World"
 ```
 
 ### Inject a file's raw contents as a template variable

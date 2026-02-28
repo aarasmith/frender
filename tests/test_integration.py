@@ -289,3 +289,34 @@ def test_multiple_env_files(setup_project, monkeypatch, capsys):
     # - unique2 from env2
     assert rendered == "foo\nbaz\nqux\nonly_in_env1\nonly_in_env2"
 
+
+def test_cli_file_var_injected_into_context(setup_project, monkeypatch, capsys):
+    tmp_path, _, _ = setup_project
+
+    #File whose raw contents will be injected
+    raw_file = tmp_path / "raw.txt"
+    raw_file.write_text("hello from file-var")
+
+    # Template that uses both env vars and the file var
+    template = tmp_path / "source_file_var.yaml"
+    template.write_text(
+        "{{ key1 }}\n{{ file_contents }}\n"
+    )
+
+    run_cli(
+        monkeypatch,
+        [
+            "source_file_var.yaml",
+            "-o",
+            "target_file_var",
+            "--env-file",
+            "env.yaml",
+            "--file-var",
+            f"file_contents={raw_file}",
+        ],
+        capsys,
+    )
+
+    rendered = (tmp_path / "target_file_var" / "source_file_var.yaml").read_text().strip()
+
+    assert rendered == "foo\nhello from file-var"
