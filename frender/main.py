@@ -247,15 +247,16 @@ def register_macros(env: jinja2.Environment, macros_dir: Path):
         paths = []
 
     try:
-        for f in macros_dir.rglob("*.j2"):
-            try:
-                rel_path = f.relative_to(macros_dir)
-                template = env.get_template(str(rel_path))
-                for name, func in template.module.__dict__.items():
-                    if callable(func) and not name.startswith("_"):
-                        env.globals[name] = func
-            except Exception as e:
-                raise RenderError(f"Failed to load macros from {f}: {e}")
+        for f in macros_dir.rglob("*"):
+            if f.is_file():
+                try:
+                    rel_path = f.relative_to(macros_dir)
+                    template = env.get_template(str(rel_path))
+                    for name, func in template.module.__dict__.items():
+                        if callable(func) and not name.startswith("_"):
+                            env.globals[name] = func
+                except Exception as e:
+                    raise RenderError(f"Failed to load macros from {f}: {e}")
     finally:
         # Restore original search paths
         if paths:
@@ -269,7 +270,7 @@ def setup_environment(template_file: Path, macros_dir: Path | None = None, filte
     - optional macros registered from macros_dir
     - optional filters registered from filters_dir
     """
-    env = jinja2.Environment(loader=jinja2.FileSystemLoader([str(template_file.parent)]))
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader([str(template_file.parent)]), extensions=["jinja2.ext.loopcontrols", "jinja2.ext.do"])
     env.filters["env_var"] = env_var
     env.globals["env_var"] = env_var
 
