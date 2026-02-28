@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 import yaml
 import jinja2
-from frender import (
+from frender.main import (
     load_env_file, load_json_file, load_yaml_file, load_toml_file, load_ini_file,
     load_context, render_file, write_rendered, collect_files, env_var, setup_environment, RenderError
 )
@@ -47,6 +47,18 @@ def test_load_ini_file(tmp_path):
     f.write_text("[section]\nkey=value")
     ctx = load_ini_file(f)
     assert ctx["section"]["key"] == "value"
+
+def test_load_file_vars_reads_utf8_text(tmp_path):
+    from frender.main import load_file_vars
+
+    f = tmp_path / "example.txt"
+    f.write_text("hello\nworld\n", encoding="utf-8")
+
+    file_vars = load_file_vars([f"content={f}"])
+
+    assert file_vars == {
+        "content": "hello\nworld\n"
+    }
 
 def test_load_context_dispatch(tmp_path):
     """Ensure load_context dispatches correctly based on file extension."""
