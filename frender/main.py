@@ -7,6 +7,8 @@ import jinja2
 from dotenv import dotenv_values
 import importlib.util
 import fnmatch
+from typing import List, Optional, Dict, Any, Callable
+import tempfile, shutil
 
 class RenderError(Exception):
     """Custom exception for template rendering errors."""
@@ -257,20 +259,6 @@ def register_filters(env: jinja2.Environment, filters_root: Path):
         except Exception as e:
             raise RenderError(f"Failed to load filters from {f}: {e}")
 
-
-
-import jinja2
-from pathlib import Path
-from typing import List, Optional, Dict, Any, Callable
-import tempfile, shutil
-
-class RenderError(Exception):
-    pass
-
-
-
-
-
 class MacroCallable:
     """
     Wraps a macro so that calling it reconstructs a template module
@@ -336,16 +324,21 @@ def register_macros(env: jinja2.Environment, macros_dir: Path) -> None:
         return
 
     if isinstance(env.loader, jinja2.FileSystemLoader):
-        original_paths = list(env.loader.searchpath)
-        env.loader.searchpath.append(str(macros_dir))
+        if str(macros_dir) not in env.loader.searchpath:
+            env.loader.searchpath.insert(0, str(macros_dir))
+            # Bust caches so re-resolution uses the updated searchpath
+            if hasattr(env, '_parse_cache'):
+                env._parse_cache.clear()
+            if hasattr(env, 'cache') and hasattr(env.cache, 'clear'):
+                env.cache.clear()
     else:
-        original_paths = []
         print("[macros][warn] non-FileSystemLoader; searchpath tweaks skipped")
 
     try:
         # Collect files deterministically
-        files: List[Path] = [f for f in macros_dir.rglob("*") if f.is_file()]
-        files.sort(key=lambda p: str(p).lower())
+        files: List[Path] = sorted(
+            [f for f in macros_dir.rglob("*") if f.is_file()]
+        )
 
         print(f"[macros] Consolidated root: {macros_dir}")
         print(f"[macros] Collected ({len(files)} files (sorted):")
@@ -370,11 +363,9 @@ def register_macros(env: jinja2.Environment, macros_dir: Path) -> None:
                         exports.append(name)
                         if name in discovered:
                             prev = name_to_file[name]
-                            raise RenderError(
-                                f"Macro name collision for '{name}':\n"
-                                f"  - first seen in: {prev}\n"
-                                f"  - also exported by: {rel}\n"
-                                f"Refactor or rename to avoid ambiguity"
+                            print(
+                                f"[macros][WARN] Macro '{name}' from {rel} overrides "
+                                f"previous definition from {prev}"
                             )
                         discovered[name] = str(rel)
                         name_to_file[name] = rel
@@ -402,12 +393,6 @@ def register_macros(env: jinja2.Environment, macros_dir: Path) -> None:
         
         # Create wrappers (they capture env, template name, macro name, and registry ref)
         for macro_name, template_name in discovered.items():
-            # If any existing global has same name, that's a collision (raise)
-            if macro_name in env.globals:
-                raise RenderError(
-                    f"Context collision for macro name '{macro_name}': "
-                    f"already present in env.globals"
-                )
             registry[macro_name] = MacroCallable(
                 env=env,
                 template_name=template_name,
@@ -423,70 +408,27 @@ def register_macros(env: jinja2.Environment, macros_dir: Path) -> None:
     finally:
         pass
 
-
-
-
-
-
 def setup_environment(template_file: Path, macro_dirs: Optional[List[Path]] = None, filter_dirs: Optional[List[Path]] = None) -> jinja2.Environment:
-
 
     env = jinja2.Environment(loader=jinja2.FileSystemLoader([str(template_file.parent)]), extensions=["jinja2.ext.loopcontrols", "jinja2.ext.do"])
     env.filters["env_var"] = env_var
     env.globals["env_var"] = env_var
 
-
-
-
     print("[setup] Template dir:", template_file.parent)
     if isinstance(env.loader, jinja2.FileSystemLoader):
         print("[setup] Initial loader.searchpath:", env.loader.searchpath)
 
-    # NOTE: do NOT clean up inside setup_environment anymore.
-    # Keep the temp dir alive through rendering by attaching it to env.
     if macro_dirs:
         print("[setup] Declared macro roots:")
         for d in macro_dirs:
             print("  DIR:", d, "ABS:", d.resolve(), "EXISTS:", d.exists())
-        
-        tmp_ctx = tempfile.TemporaryDirectory(prefix="frender_macros_")
-        tmp_root = Path(tmp_ctx.name)
-        print("[setup] Consolidated temp root:", tmp_root)
 
-        copied = 0
+        # Register each macro directory in CLI order.
+        # Later directories override earlier ones.
         for mdir in macro_dirs:
             if not mdir or not mdir.exists():
-                print(f"[setup][warn] Skipping missing macros dir: {mdir}")
                 continue
-            for f in mdir.rglob("*"):
-                if f.is_file():
-                    target = tmp_root / f.name
-                    if target.exists():
-                        raise RenderError(
-                            f"Filename collision while consolidating macros:\n"
-                            f"  - '{f.name}' already exists at {target}\n"
-                            f"  - also from: {f}\n"
-                            f"Rename one of the files to avoid ambiguity"
-                        )
-                    shutil.copyfile(f, target)
-                    copied += 1
-        print(f"[setup] Copied {copied} macro files into {tmp_root}")
-
-        # <- keep macro root on the loader for the ENTIRE env lifetime
-        if isinstance(env.loader, jinja2.FileSystemLoader):
-            env.loader.searchpath.append(str(tmp_root))
-            print("[setup] loader.searchpath now:", env.loader.searchpath)
-        
-        # build callable macro registry (your current dbt-style register_macros)
-        register_macros(env, tmp_root)
-
-        # attach temp ctx to env so caller can clean after render
-        env._frender_macros_tmp_ctx = tmp_ctx
-        env._frender_macros_root = tmp_root
-
-        # quick probe
-        probe = env.from_string("{{ 'HAS_REF' if ref is defined else 'NO_REF' }}")
-        print("[setup] RUNTIME PROBE (ref defined?):", probe.render())
+            register_macros(env, mdir)
     
     if filter_dirs:
         print("[setup] Declared filter roots:")
@@ -603,8 +545,6 @@ def main():
         macro_dirs = [Path(p) for p in (args.macros_dir or [])]
         filter_dirs = [Path(p) for p in (args.filters_dir or [])]
 
-
-
         env = None
         try:
             for i, src in enumerate(files):
@@ -617,8 +557,6 @@ def main():
                         if parent not in env.loader.searchpath:
                             env.loader.searchpath.append(parent)
                 
-
-
                 rendered = render_file(src.name, env, context)
 
                 if args.overwrite:

@@ -324,54 +324,45 @@ def test_cli_file_var_injected_into_context(setup_project, monkeypatch, capsys):
 
     assert rendered == "foo\nhello from file-var"
 
-def test_multiple_macro_and_filter_dirs(setup_project, monkeypatch, capsys):
-    tmp_path, macros_base, filters_base = setup_project
-
-    # Base macro
-    macros1 = macros_base
-
-    # Override macro - DIFFERENT FILE NAME TO BYPASS JINJA CACHE
-    macros2 = tmp_path / "macros_override"
-    macros2.mkdir()
-    (macros2 / "override_macro.j2").write_text(
-        "{% macro test_macro(x) %}OVERRIDE {{ x }}{% endmacro %}"
+def test_filter_override_later_dir_wins(tmp_path, monkeypatch, capsys):
+    """
+    Verify that a filter defined in a later --filters-dir supersedes one with the same
+    name from an earlier directory, mirroring the override semantics of --macros-dir.
+    """
+    filters1 = tmp_path / "filters1"
+    filters1.mkdir()
+    (filters1 / "ref.py").write_text(
+        "from markupsafe import Markup\n"
+        "def ref(value):\n"
+        "    return Markup(f'FIRST({value})')\n"
     )
 
-    #Base filter
-    filters1 = filters_base
-
-    #Override filter
-    filters2 = tmp_path / "filters_override"
+    filters2 = tmp_path / "filters2"
     filters2.mkdir()
     (filters2 / "ref.py").write_text(
         "from markupsafe import Markup\n"
         "def ref(value):\n"
-        "    return Markup(f'OVERRIDEN({value})')\n"
+        "    return Markup(f'SECOND({value})')\n"
     )
 
-    # Template using both macro + filter
-    tpl = tmp_path / "source_multi.yaml"
-    tpl.write_text(
-        "{{ test_macro('foo') }}\n"
-        "{{ ref('bar') }}\n"
-    )
+    tpl = tmp_path / "tpl.j2"
+    tpl.write_text("{{ 'bar' | ref }}")
+
+    out_dir = tmp_path / "out"
 
     run_cli(
         monkeypatch,
         [
-            "source_multi.yaml",
-            "-o", "target_multi_dirs",
-            "--macros-dir", str(macros1),
-            "--macros-dir", str(macros2),
+            str(tpl),
+            "-o", str(out_dir),
             "--filters-dir", str(filters1),
             "--filters-dir", str(filters2),
-            "--env-file", "env.yaml",
         ],
         capsys,
     )
 
-    rendered = (tmp_path / "target_multi_dirs" / "source_multi.yaml").read_text().strip()
-    assert rendered == "OVERRIDE foo\nOVERRIDEN(bar)"
+    rendered = (out_dir / tpl.name).read_text().strip()
+    assert rendered == "SECOND(bar)"
 
 def test_deeply_nested_macros_across_directories_order_independent(setup_project, monkeypatch, capsys):
     """
@@ -446,3 +437,155 @@ def test_deeply_nested_macros_across_directories_order_independent(setup_project
     out2 = (tmp_path / "target_nesting_o2" / "source_nesting.yaml").read_text().strip()
     assert out2 == "OUTER -> MID [INNER foo] & INNER foo"
 
+def test_macro_diamond_dependency_across_directories(setup_project, monkeypatch, capsys):
+    """
+    Verify correct resolution when multiple macros share a common dependency (diamond pattern),
+    all living in separate --macros-dir directories.
+
+    Call graph:
+                     outer(x)
+                    /         \\
+              mid_a(x)       mid_b(x)
+                    \\         /
+                     inner(x)
+
+    'inner' must be resolved correctly when called from both mid_a AND mid_b, even though
+    none of these macros share a file or use explicit {% import %} statements.
+    This is the strongest stress-test for the registry's call-time context injection —
+    a naive implementation that injects context shallowly would fail here.
+
+    Expected: "DIAMOND: [A: INNER foo] + [B: INNER foo]"
+    """
+    tmp_path, _, _ = setup_project
+
+    macros_inner = tmp_path / "macros_inner"
+    macros_inner.mkdir()
+    (macros_inner / "inner.j2").write_text(
+        "{% macro inner(x) %}INNER {{ x }}{% endmacro %}"
+    )
+
+    macros_mid_a = tmp_path / "macros_mid_a"
+    macros_mid_a.mkdir()
+    (macros_mid_a / "mid_a.j2").write_text(
+        "{% macro mid_a(x) %}A: {{ inner(x) }}{% endmacro %}"
+    )
+
+    macros_mid_b = tmp_path / "macros_mid_b"
+    macros_mid_b.mkdir()
+    (macros_mid_b / "mid_b.j2").write_text(
+        "{% macro mid_b(x) %}B: {{ inner(x) }}{% endmacro %}"
+    )
+
+    macros_outer = tmp_path / "macros_outer"
+    macros_outer.mkdir()
+    (macros_outer / "outer.j2").write_text(
+        "{% macro outer(x) %}DIAMOND: [{{ mid_a(x) }}] + [{{ mid_b(x) }}]{% endmacro %}"
+    )
+
+    tpl = tmp_path / "source_diamond.yaml"
+    tpl.write_text("{{ outer('foo') }}\n")
+
+    # Order 1: outer registered first (worst case — dependencies not yet known)
+    run_cli(
+        monkeypatch,
+        [
+            "source_diamond.yaml",
+            "-o", "target_diamond_o1",
+            "--macros-dir", str(macros_outer),
+            "--macros-dir", str(macros_mid_a),
+            "--macros-dir", str(macros_mid_b),
+            "--macros-dir", str(macros_inner),
+            "--env-file", "env.yaml",
+        ],
+        capsys,
+    )
+    out1 = (tmp_path / "target_diamond_o1" / "source_diamond.yaml").read_text().strip()
+    assert out1 == "DIAMOND: [A: INNER foo] + [B: INNER foo]"
+
+    # Order 2: inner registered first
+    run_cli(
+        monkeypatch,
+        [
+            "source_diamond.yaml",
+            "-o", "target_diamond_o2",
+            "--macros-dir", str(macros_inner),
+            "--macros-dir", str(macros_mid_a),
+            "--macros-dir", str(macros_mid_b),
+            "--macros-dir", str(macros_outer),
+            "--env-file", "env.yaml",
+        ],
+        capsys,
+    )
+    out2 = (tmp_path / "target_diamond_o2" / "source_diamond.yaml").read_text().strip()
+    assert out2 == "DIAMOND: [A: INNER foo] + [B: INNER foo]"
+
+def test_macro_override_later_dir_wins(tmp_path, monkeypatch, capsys):
+    macros1 = tmp_path / "macros1"
+    macros1.mkdir()
+    (macros1 / "base.j2").write_text(
+        "{% macro test_macro(x) %}BASE {{ x }}{% endmacro %}"
+    )
+
+    macros2 = tmp_path / "macros2"
+    macros2.mkdir()
+    (macros2 / "override.j2").write_text(
+        "{% macro test_macro(x) %}OVERRIDE {{ x }}{% endmacro %}"
+    )
+
+    tpl = tmp_path / "tpl.j2"
+    tpl.write_text("{{ test_macro('foo') }}")
+
+    # Output directory
+    out_dir = tmp_path / "out"
+
+    run_cli(
+        monkeypatch,
+        [
+            str(tpl),
+            "-o", str(out_dir),
+            "--macros-dir", str(macros1),
+            "--macros-dir", str(macros2),
+        ],
+        capsys,
+    )
+
+    # Let the CLI decide the output filename; mirror source
+    output_file = out_dir / tpl.name
+    assert output_file.exists(), f"Expected rendered file: {output_file}"
+    rendered = output_file.read_text().strip()
+    assert rendered == "OVERRIDE foo"
+
+
+def test_macro_override_same_filename(tmp_path, monkeypatch, capsys):
+    macros1 = tmp_path / "macros1"
+    macros1.mkdir()
+    (macros1 / "test.j2").write_text(
+        "{% macro test_macro(x) %}FIRST {{ x }}{% endmacro %}"
+    )
+
+    macros2 = tmp_path / "macros2"
+    macros2.mkdir()
+    (macros2 / "test.j2").write_text(
+        "{% macro test_macro(x) %}SECOND {{ x }}{% endmacro %}"
+    )
+
+    tpl = tmp_path / "tpl.j2"
+    tpl.write_text("{{ test_macro('foo') }}")
+
+    out_dir = tmp_path / "out"
+
+    run_cli(
+        monkeypatch,
+        [
+            str(tpl),
+            "-o", str(out_dir),
+            "--macros-dir", str(macros1),
+            "--macros-dir", str(macros2),
+        ],
+        capsys,
+    )
+
+    output_file = out_dir / tpl.name
+    assert output_file.exists(), f"Expected rendered file: {output_file}"
+    rendered = output_file.read_text().strip()
+    assert rendered == "SECOND foo"
