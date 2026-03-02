@@ -8,7 +8,6 @@ from dotenv import dotenv_values
 import importlib.util
 import fnmatch
 from typing import List, Optional, Dict, Any, Callable
-import tempfile, shutil
 
 class RenderError(Exception):
     """Custom exception for template rendering errors."""
@@ -385,7 +384,7 @@ def register_macros(env: jinja2.Environment, macros_dir: Path) -> None:
         extra_globals: Dict[str, Any] = {}
         for k, v in env.globals.items():
             if k not in discovered: # don't shadow macro names
-               extra_globals[k] = extra_globals[k] = v
+               extra_globals[k] = v
         # Also expose filters as callable helpers by name (optional)
         for k, v, in env.filters.items():
             if k not in discovered and k not in extra_globals:
@@ -403,10 +402,11 @@ def register_macros(env: jinja2.Environment, macros_dir: Path) -> None:
         # Publish wrappers to env.globals (dbt-style callable macro objects)
         env.globals.update(registry)
         print("[macros] Published callable macro registry to env.globals.")
-        print("[macros] env.globals has 'ref':" "ref" in env.globals)
 
-    finally:
-        pass
+    except RenderError:
+        raise  # already formatted, let it propagate
+    except Exception as e:
+        raise RenderError(f"Failed to register macros from {macros_dir}: {e}") from e
 
 def setup_environment(template_file: Path, macro_dirs: Optional[List[Path]] = None, filter_dirs: Optional[List[Path]] = None) -> jinja2.Environment:
 
@@ -546,48 +546,41 @@ def main():
         filter_dirs = [Path(p) for p in (args.filters_dir or [])]
 
         env = None
-        try:
-            for i, src in enumerate(files):
-                if env is None:
-                    env = setup_environment(src, macro_dirs=macro_dirs, filter_dirs=filter_dirs)
-                else:
-                    # If the next file is in another folder, add it to the search path
-                    if isinstance(env.loader, jinja2.FileSystemLoader):
-                        parent = str(src.parent)
-                        if parent not in env.loader.searchpath:
-                            env.loader.searchpath.append(parent)
-                
-                rendered = render_file(src.name, env, context)
+        for i, src in enumerate(files):
+            if env is None:
+                env = setup_environment(src, macro_dirs=macro_dirs, filter_dirs=filter_dirs)
+            else:
+                # If the next file is in another folder, add it to the search path
+                if isinstance(env.loader, jinja2.FileSystemLoader):
+                    parent = str(src.parent)
+                    if parent not in env.loader.searchpath:
+                        env.loader.searchpath.append(parent)
+            
+            rendered = render_file(src.name, env, context)
 
-                if args.overwrite:
-                    write_rendered(src, rendered, src)
+            if args.overwrite:
+                write_rendered(src, rendered, src)
+            
+            #target directory
+            elif args.output:
                 
-                #target directory
-                elif args.output:
-                    
-                    flatten = False
-                    if args.input_file or args.list:
-                        flatten = True
-                    elif args.file_list or args.dir:
-                        flatten = args.single_dir
+                flatten = False
+                if args.input_file or args.list:
+                    flatten = True
+                elif args.file_list or args.dir:
+                    flatten = args.single_dir
 
-                    if flatten:
-                        dest = Path(args.output) / src.name
-                    else:
-                        rel_path = src if not args.dir else src.relative_to(Path(args.dir))
-                        dest = Path(args.output) / rel_path
-                    
-                    write_rendered(src, rendered, dest)
-                
-                # stdout
+                if flatten:
+                    dest = Path(args.output) / src.name
                 else:
-                    write_rendered(src, rendered, None)
-        finally:
-            # single cleanup after all files have rendered
-            if env is not None:
-                tmp_ctx = getattr(env, "_frender_macros_tmp_ctx", None)
-                if tmp_ctx is not None:
-                    tmp_ctx.cleanup()
+                    rel_path = src if not args.dir else src.relative_to(Path(args.dir))
+                    dest = Path(args.output) / rel_path
+                
+                write_rendered(src, rendered, dest)
+            
+            # stdout
+            else:
+                write_rendered(src, rendered, None)
 
     except RenderError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
