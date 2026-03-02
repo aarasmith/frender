@@ -8,6 +8,9 @@ from dotenv import dotenv_values
 import importlib.util
 import fnmatch
 from typing import List, Optional, Dict, Any, Callable
+import logging
+
+logger = logging.getLogger("frender")
 
 class RenderError(Exception):
     """Custom exception for template rendering errors."""
@@ -148,15 +151,6 @@ def render_file(src_path: Path, env: jinja2.Environment, context: dict) -> str:
     """Render a Jinja2 template file with env loader and provided context."""
     try:
         template = env.get_template(str(src_path))
-        
-        # inject macro callables into the render-time context
-        # we only merge callable entries (macros/functions) to minimize collisions
-        macro_callables = {k: v for k, v in env.globals.items() if callable(v)}
-
-        print("[render] callable macros injected:", sorted(macro_callables.keys()))
-        print("[render] original context keys:", sorted(context.keys()))
-
-        # render with macros + user context; macros first so user keys win if identical
         return template.render(**context)
     except Exception as e:
         raise RenderError(f"Failed to render template {src_path}: {e}")
@@ -309,88 +303,74 @@ def register_macros(env: jinja2.Environment, macros_dir: Path) -> None:
     """
     Build a dbt-style macro registry:
 
-    1) Add macros_dir to loader.searchpath temporarily
-    2) Collect files deterministically; compile with vars={} just to DISCOVER exported macro names.
-    3) Raise on name collision (no silent overwrite).
-    4) Create MacroCallable wrappers for each macro, putting them in env.globals
-    The wrapper reconstructs the template module with a FULL context at call time,
-    so nested macro calls (A->B->C...) resolve correctly (order-independent). [1](https://github.com/dbt-labs/dbt-core/blob/main/core/dbt/context/README.md)
+    1) Add macros_dir to loader.searchpath (inserted at front so later dirs take priority)
+    2) Collect files deterministically; compile with vars={} to discover exported macro names.
+    3) Warn on name collision; later directory wins.
+    4) Create MacroCallable wrappers for each macro and publish to env.globals.
 
-    Includes verbose sanity prints.
+    The wrapper reconstructs the template module with a full context at call time,
+    so nested macro calls (A->B->C...) resolve correctly regardless of registration order.
     """
     if not macros_dir or not macros_dir.exists():
-        print(f"[macros] macros_dir missing/empty: {macros_dir}")
+        logger.warning("[macros] macros_dir missing/empty: %s", macros_dir)
         return
 
     if isinstance(env.loader, jinja2.FileSystemLoader):
         if str(macros_dir) not in env.loader.searchpath:
             env.loader.searchpath.insert(0, str(macros_dir))
-            # Bust caches so re-resolution uses the updated searchpath
             if hasattr(env, '_parse_cache'):
                 env._parse_cache.clear()
             if hasattr(env, 'cache') and hasattr(env.cache, 'clear'):
                 env.cache.clear()
     else:
-        print("[macros][warn] non-FileSystemLoader; searchpath tweaks skipped")
+        logger.warning("[macros] non-FileSystemLoader; searchpath tweaks skipped")
 
     try:
-        # Collect files deterministically
         files: List[Path] = sorted(
             [f for f in macros_dir.rglob("*") if f.is_file()]
         )
 
-        print(f"[macros] Consolidated root: {macros_dir}")
-        print(f"[macros] Collected ({len(files)} files (sorted):")
+        logger.debug("[macros] Scanning dir: %s (%d files)", macros_dir, len(files))
         for f in files:
-            print("  -", f)
-        
-        # PASS: discover exports (names only)
+            logger.debug("  - %s", f)
+
         discovered: Dict[str, str] = {}
         name_to_file: Dict[str, Path] = {}
 
-        print("[macros][DISCOVER] Compiling with vars={} to enumerate exported macros ...")
         for f in files:
             rel = f.relative_to(macros_dir)
-            print(f"[macros][DISCOVER] {f}  as  {rel}")
+            logger.debug("[macros][DISCOVER] %s as %s", f, rel)
             try:
                 tmpl = env.get_template(str(rel))
-                mod = tmpl.make_module(vars={}) # No names provided; safe to discover
+                mod = tmpl.make_module(vars={})
                 exports = []
                 for name in dir(mod):
                     obj = getattr(mod, name, None)
                     if callable(obj) and not name.startswith("_"):
                         exports.append(name)
                         if name in discovered:
-                            prev = name_to_file[name]
-                            print(
-                                f"[macros][WARN] Macro '{name}' from {rel} overrides "
-                                f"previous definition from {prev}"
+                            logger.warning(
+                                "[macros] Macro '%s' from %s overrides previous definition from %s",
+                                name, rel, name_to_file[name]
                             )
                         discovered[name] = str(rel)
                         name_to_file[name] = rel
-                print(f"[macros][DISCOVER]  exports => {exports}")
+                logger.debug("[macros][DISCOVER] %s exports: %s", rel, exports)
             except Exception as e:
                 raise RenderError(f"Failed to discover macros from {f}: {e}")
-        
-        print(f"[macros] Discovered {len(discovered)} macros.")
-        print(f"[macros] Macro names: {sorted(discovered.keys())}")
 
-        # Build wrapper registry (live dict so wrappers see each other)
+        logger.debug("[macros] Registered %d macros: %s", len(discovered), sorted(discovered.keys()))
+
         registry: Dict[str, Callable] = {}
 
-        # Extra globals you want available in every macro body at call time:
-        # - keep env.globals entries that are NOT callables (to avoid name conflicts)
-        # - plus selected callables like env_var, filters, etc., if desired
         extra_globals: Dict[str, Any] = {}
         for k, v in env.globals.items():
-            if k not in discovered: # don't shadow macro names
-               extra_globals[k] = v
-        # Also expose filters as callable helpers by name (optional)
-        for k, v, in env.filters.items():
+            if k not in discovered:
+                extra_globals[k] = v
+        for k, v in env.filters.items():
             if k not in discovered and k not in extra_globals:
                 extra_globals[k] = v
-        
-        # Create wrappers (they capture env, template name, macro name, and registry ref)
+
         for macro_name, template_name in discovered.items():
             registry[macro_name] = MacroCallable(
                 env=env,
@@ -399,43 +379,41 @@ def register_macros(env: jinja2.Environment, macros_dir: Path) -> None:
                 registry_ref=registry,
                 extra_globals=extra_globals,
             )
-        # Publish wrappers to env.globals (dbt-style callable macro objects)
+
         env.globals.update(registry)
-        print("[macros] Published callable macro registry to env.globals.")
 
     except RenderError:
-        raise  # already formatted, let it propagate
+        raise
     except Exception as e:
         raise RenderError(f"Failed to register macros from {macros_dir}: {e}") from e
 
 def setup_environment(template_file: Path, macro_dirs: Optional[List[Path]] = None, filter_dirs: Optional[List[Path]] = None) -> jinja2.Environment:
 
-    env = jinja2.Environment(loader=jinja2.FileSystemLoader([str(template_file.parent)]), extensions=["jinja2.ext.loopcontrols", "jinja2.ext.do"])
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader([str(template_file.parent)]),
+        extensions=["jinja2.ext.loopcontrols", "jinja2.ext.do"]
+    )
     env.filters["env_var"] = env_var
     env.globals["env_var"] = env_var
 
-    print("[setup] Template dir:", template_file.parent)
-    if isinstance(env.loader, jinja2.FileSystemLoader):
-        print("[setup] Initial loader.searchpath:", env.loader.searchpath)
+    logger.debug("[setup] Template dir: %s", template_file.parent)
+    logger.debug("[setup] Initial loader.searchpath: %s", env.loader.searchpath)
 
     if macro_dirs:
-        print("[setup] Declared macro roots:")
+        logger.debug("[setup] Declared macro roots:")
         for d in macro_dirs:
-            print("  DIR:", d, "ABS:", d.resolve(), "EXISTS:", d.exists())
-
-        # Register each macro directory in CLI order.
-        # Later directories override earlier ones.
+            logger.debug("  DIR: %s  ABS: %s  EXISTS: %s", d, d.resolve(), d.exists())
         for mdir in macro_dirs:
             if not mdir or not mdir.exists():
                 continue
             register_macros(env, mdir)
-    
+
     if filter_dirs:
-        print("[setup] Declared filter roots:")
+        logger.debug("[setup] Declared filter roots:")
         for d in filter_dirs:
-            print("  DIR:", d, "ABS:", d.resolve(), "EXISTS:", d.exists())
+            logger.debug("  DIR: %s  ABS: %s  EXISTS: %s", d, d.resolve(), d.exists())
             register_filters(env, d)
-    
+
     return env
 
 # ---------------------------
@@ -519,8 +497,22 @@ def main():
     parser.add_argument("--file-var", action="append", metavar="NAME=PATH", help="Inject file contents as a Jinja variable (can be used multiple times)")
     parser.add_argument("--macros-dir", action="append", help="Directory containing Jinja macros to register globally (can be specified multiple times)")
     parser.add_argument("--filters-dir", action="append", help="Directory containing Python files to register as Jinja filters/globals (can be specified multiple times)")
-
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug output")
+    parser.add_argument("-s", "--silent", action="store_true", help="Suppress all logging output")
+    
     args = parser.parse_args()
+
+    if args.silent:
+        log_level = logging.CRITICAL
+    elif args.verbose:
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.WARNING
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(levelname)s [%(name)s] %(message)s"
+    )
 
     validate_input_sources(args, parser)
 
@@ -583,10 +575,10 @@ def main():
                 write_rendered(src, rendered, None)
 
     except RenderError as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
+        logger.error("%s", e)
         sys.exit(1)
     except Exception as e:
-        print(f"[UNEXPECTED ERROR] {e}", file=sys.stderr)
+        logger.exception("Unexpected error: %s", e)  # logger.exception includes the traceback
         sys.exit(2)
 
 if __name__ == "__main__":

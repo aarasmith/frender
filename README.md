@@ -26,7 +26,8 @@ A command-line tool to render Jinja2 templated files with context variables, cus
 | `--file-var`        | `str`  | `None`   | Inject file contents as a Jinja variable (can be used multiple times) `<VAR_NAME>=<PATH>`.          |
 | `--macros-dir`      | `str`  | `None`   | Directory containing Jinja macros to register globally for all templates.                           |
 | `--filters-dir`     | `str`  | `None`   | Directory containing Python files with functions to register as Jinja filters and globals.          |
-
+| `-v`, `--verbose`   | flag   | `False`  | Enable verbose debug output.                                                                        |
+| `-s`, `--silent`    | flag   | `False`  | Suppress all logging output. Useful when redirecting stdout. Mutually exclusive with `--verbose`.   |
 
 ## Examples
 
