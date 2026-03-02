@@ -514,17 +514,17 @@ def main():
         format="%(levelname)s [%(name)s] %(message)s"
     )
 
-    validate_input_sources(args, parser)
-
-    config = load_frender_config()
-    
-    if not args.env_file and config.get("ENV_FILE"):
-        args.env_file = [config.get("ENV_FILE")]
-    args.env_file = args.env_file or [".env"]
-    args.macros_dir = args.macros_dir or config.get("MACROS_DIR")
-    args.filters_dir = args.filters_dir or config.get("FILTERS_DIR")
-
     try:
+        validate_input_sources(args, parser)
+
+        config = load_frender_config()
+        
+        if not args.env_file and config.get("ENV_FILE"):
+            args.env_file = [config.get("ENV_FILE")]
+        args.env_file = args.env_file or [".env"]
+        args.macros_dir = args.macros_dir or config.get("MACROS_DIR")
+        args.filters_dir = args.filters_dir or config.get("FILTERS_DIR")
+        
         files = collect_files(args)
 
         if not args.output and not args.overwrite and len(files) > 1:
