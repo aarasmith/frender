@@ -57,38 +57,43 @@ def make_macros_and_filters(base: Path):
     """))
     return macros, filters
 
-def make_config(base_path: Path, env_file=None, macros_dir=None, filters_dir=None) -> Path:
-    """Write a .frender/config file inside base_path."""
+def make_config(base_path: Path, env_files=None, macros_dirs=None, filters_dirs=None) -> Path:
+    """Write a .frender/config.yaml inside base_path (used as mock home in tests)."""
     config_dir = base_path / ".frender"
     config_dir.mkdir(exist_ok=True)
-    config_file = config_dir / "config"
-    lines = [
-        f"ENV_FILE={env_file or ''}",
-        f"MACROS_DIR={macros_dir or ''}",
-        f"FILTERS_DIR={filters_dir or ''}"
-    ]
-    config_file.write_text("\n".join(lines))
+    config_file = config_dir / "config.yaml"
+
+    import yaml
+    config = {}
+    if env_files:
+        config["env_files"] = [str(p) for p in env_files]
+    if macros_dirs:
+        config["macros_dirs"] = [str(p) for p in macros_dirs]
+    if filters_dirs:
+        config["filters_dirs"] = [str(p) for p in filters_dirs]
+
+    config_file.write_text(yaml.dump(config) if config else "")
     return config_file
 
-def run_cli(monkeypatch, argv, capsys):
+
+def run_cli(monkeypatch, argv, capsys, home=None):
     monkeypatch.setattr(sys, "argv", ["frender.py", *argv])
+    if home:
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
     try:
         frender.main()
-    except SystemExit as e:
-        # Let pytest continue; we can inspect exit code if needed
+    except SystemExit:
         pass
     return capsys.readouterr()
 
 
-# ---------------------------
-# Fixtures
-# ---------------------------
-
 @pytest.fixture
-def setup_project(tmp_path):
+def setup_project(tmp_path, monkeypatch):
     make_env_files(tmp_path)
     make_sources(tmp_path)
     macros, filters = make_macros_and_filters(tmp_path)
+    # Point home at tmp_path so load_frender_config never picks up a real ~/.frender/config.yaml
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     cwd = os.getcwd()
     os.chdir(tmp_path)
     yield tmp_path, macros, filters
@@ -101,19 +106,19 @@ def setup_project(tmp_path):
 
 def test_stdout_render(setup_project, monkeypatch, capsys):
     tmp_path, _, _ = setup_project
-    out = run_cli(monkeypatch, ["source1/test.yml"], capsys)
+    out = run_cli(monkeypatch, ["source1/test.yml", "--env-file", ".env"], capsys)
     assert out.out.strip() == "foo\nbar"
 
 
 def test_overwrite_in_place(setup_project, monkeypatch, capsys):
     tmp_path, _, _ = setup_project
-    run_cli(monkeypatch, ["source1/test.yml", "-ow"], capsys)
+    run_cli(monkeypatch, ["source1/test.yml", "-ow", "--env-file", ".env"], capsys)
     assert Path("source1/test.yml").read_text().strip() == "foo\nbar"
 
 
 def test_list_mode_flatten(setup_project, monkeypatch, capsys):
     tmp_path, _, _ = setup_project
-    run_cli(monkeypatch, ["-l", "source1/test.yml,source1/test2.yaml", "-o", "target"], capsys)
+    run_cli(monkeypatch, ["-l", "source1/test.yml,source1/test2.yaml", "-o", "target", "--env-file", ".env"], capsys)
     assert Path("target/test.yml").read_text().strip() == "foo\nbar"
     assert Path("target/test2.yaml").read_text().strip() == "foo\nbar"
 
@@ -178,71 +183,33 @@ def test_filters_dir(setup_project, monkeypatch, capsys):
 
 def test_cli_overrides_config(setup_project, monkeypatch, capsys):
     """
-    Verify that --env-file, --macros-dir, and --filters-dir CLI arguments
-    override any values specified in the ~/.frender/config file.
+    Verify that config and CLI args are merged correctly, with CLI args appended
+    after config values. Nonexistent config paths are skipped gracefully,
+    so only the CLI-specified paths affect rendering.
     """
     tmp_path, macros, filters = setup_project
 
-    # Write dummy config (values won't actually be used)
-    make_config(tmp_path, env_file="dummy_env", macros_dir="dummy_macros", filters_dir="dummy_filters")
+    make_config(
+        tmp_path,
+        env_files=[tmp_path / "nonexistent.yaml"],
+        macros_dirs=[tmp_path / "nonexistent_macros"],
+        filters_dirs=[tmp_path / "nonexistent_filters"],
+    )
 
-    # Monkeypatch Path.home() so frender will pick up the config file
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-
-    # Run CLI on each source file with explicit CLI overrides
     for src in ["env.yaml", "macro.yaml", "filter.yaml"]:
         run_cli(
             monkeypatch,
             [
                 f"source2/{src}",
-                "-o",
-                "target_override",
-                "--env-file",
-                "env.yaml",
-                "--macros-dir",
-                "macros",
-                "--filters-dir",
-                "filters",
+                "-o", "target_override",
+                "--env-file", str(tmp_path / "env.yaml"),
+                "--macros-dir", str(macros),
+                "--filters-dir", str(filters),
             ],
             capsys,
+            home=tmp_path,
         )
 
-    # Verify all files rendered correctly using the CLI-specified paths
-    assert (tmp_path / "target_override" / "env.yaml").read_text().strip() == "foo\nbar\nbaz"
-    assert (tmp_path / "target_override" / "macro.yaml").read_text().strip() == "I am a macro foo"
-    assert (tmp_path / "target_override" / "filter.yaml").read_text().strip() == "{{ ref(foo) }}"
-def test_cli_overrides_config(setup_project, monkeypatch, capsys):
-    """
-    Verify that --env-file, --macros-dir, and --filters-dir CLI arguments
-    override any values specified in the ~/.frender/config file.
-    """
-    tmp_path, macros, filters = setup_project
-
-    # Write dummy config (values won't actually be used)
-    make_config(tmp_path, env_file="dummy_env", macros_dir="dummy_macros", filters_dir="dummy_filters")
-
-    # Monkeypatch Path.home() so frender will pick up the config file
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-
-    # Run CLI on each source file with explicit CLI overrides
-    for src in ["env.yaml", "macro.yaml", "filter.yaml"]:
-        run_cli(
-            monkeypatch,
-            [
-                f"source2/{src}",
-                "-o",
-                "target_override",
-                "--env-file",
-                "env.yaml",
-                "--macros-dir",
-                "macros",
-                "--filters-dir",
-                "filters",
-            ],
-            capsys,
-        )
-
-    # Verify all files rendered correctly using the CLI-specified paths
     assert (tmp_path / "target_override" / "env.yaml").read_text().strip() == "foo\nbar\nbaz"
     assert (tmp_path / "target_override" / "macro.yaml").read_text().strip() == "I am a macro foo"
     assert (tmp_path / "target_override" / "filter.yaml").read_text().strip() == "{{ ref(foo) }}"

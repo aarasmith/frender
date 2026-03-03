@@ -57,7 +57,7 @@ def load_context(env_files: list[Path]) -> list[dict]:
     loaded_files = []
     for env_file in env_files:
         if not env_file.exists():
-            return {}
+            continue
 
         suffix = env_file.suffix.lower()
         try:
@@ -163,7 +163,7 @@ def write_rendered(src: Path, rendered: str, dest: Path | None):
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(rendered)
-            print(f"Rendered: {src} -> {dest}")
+            logger.info("Rendered: %s -> %s", src, dest)
     except Exception as e:
         raise RenderError(f"Failed to write rendered output for {src} -> {dest}: {e}")
 
@@ -420,38 +420,58 @@ def setup_environment(template_file: Path, macro_dirs: Optional[List[Path]] = No
 # Config setup
 # ---------------------------
 
-def run_config_setup():
+CONFIG_TEMPLATE = """\
+# frender configuration file
+# All paths support ~ expansion and can be relative or absolute.
+
+# Default environment/variable files (loaded in order, later files override earlier ones)
+# env_files:
+#   - ~/.frender/defaults.env
+#   - ~/projects/common.yaml
+
+# Macro directories (loaded in order, later directories override earlier ones)
+# macros_dirs:
+#   - ~/frender/macros
+
+# Filter directories
+# filters_dirs:
+#   - ~/frender/filters
+"""
+
+def init_config():
+    """Write a commented config template to ~/.frender/config.yaml if it doesn't exist."""
     config_dir = Path.home() / ".frender"
     config_dir.mkdir(exist_ok=True)
-    config_path = config_dir / "config"
+    config_path = config_dir / "config.yaml"
 
-    print("frender configuration setup")
-    env_file = input("Path to your default env file (or leave blank): ").strip()
-    macros_dir = input("Path to your macros directory (or leave blank): ").strip()
-    filters_dir = input("Path to your filters directory (or leave blank): ").strip()
+    if config_path.exists():
+        print(f"Config already exists at {config_path}")
+        return
 
-    # Expand '~', convert relative to absolute paths
-    def expand(path):
-        if not path:
-            return ""
-        return str((Path(path).expanduser().resolve()))
-
-    lines = [
-        f"ENV_FILE={expand(env_file)}",
-        f"MACROS_DIR={expand(macros_dir)}",
-        f"FILTERS_DIR={expand(filters_dir)}"
-    ]
-
-    config_path.write_text("\n".join(lines))
-    print(f"Configuration saved to {config_path}")
+    config_path.write_text(CONFIG_TEMPLATE)
+    print(f"Config template written to {config_path}")
+    print("Edit it to set your defaults, then run frender as normal.")
 
 def load_frender_config() -> dict:
-    """Load the ~/.frender/config file if it exists."""
-    config_path = Path.home() / ".frender" / "config"
+    """Load ~/.frender/config.yaml if it exists. Returns a dict with list values."""
+    config_path = Path.home() / ".frender" / "config.yaml"
     if not config_path.exists():
         return {}
-    print(f"Using configuration at: {config_path}")
-    return dotenv_values(config_path)
+    logger.debug("Using configuration at: %s", config_path)
+    try:
+        raw = load_yaml_file(config_path) or {}
+    except Exception as e:
+        raise RenderError(f"Failed to load frender config: {e}")
+
+    # Normalise all path lists: expand ~ and resolve relative paths
+    def expand_paths(key):
+        return [str(Path(p).expanduser().resolve()) for p in raw.get(key) or []]
+
+    return {
+        "env_files":    expand_paths("env_files"),
+        "macros_dirs":  expand_paths("macros_dirs"),
+        "filters_dirs": expand_paths("filters_dirs"),
+    }
 
 # ---------------------------
 # Input validation
@@ -497,17 +517,22 @@ def main():
     parser.add_argument("--file-var", action="append", metavar="NAME=PATH", help="Inject file contents as a Jinja variable (can be used multiple times)")
     parser.add_argument("--macros-dir", action="append", help="Directory containing Jinja macros to register globally (can be specified multiple times)")
     parser.add_argument("--filters-dir", action="append", help="Directory containing Python files to register as Jinja filters/globals (can be specified multiple times)")
+    parser.add_argument("--init", action="store_true", help="Write a starter config to ~/.frender/config.yaml and exit")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug output")
     parser.add_argument("-s", "--silent", action="store_true", help="Suppress all logging output")
     
     args = parser.parse_args()
+
+    if args.init:
+        init_config()
+        sys.exit(0)
 
     if args.silent:
         log_level = logging.CRITICAL
     elif args.verbose:
         log_level = logging.DEBUG
     else:
-        log_level = logging.WARNING
+        log_level = logging.INFO
 
     logging.basicConfig(
         level=log_level,
@@ -519,11 +544,10 @@ def main():
 
         config = load_frender_config()
         
-        if not args.env_file and config.get("ENV_FILE"):
-            args.env_file = [config.get("ENV_FILE")]
-        args.env_file = args.env_file or [".env"]
-        args.macros_dir = args.macros_dir or config.get("MACROS_DIR")
-        args.filters_dir = args.filters_dir or config.get("FILTERS_DIR")
+        # Config provides the base layer; CLI args extend it (config first, CLI after)
+        args.env_file = config.get("env_files", []) + (args.env_file or [])
+        args.macros_dir = config.get("macros_dirs", []) + (args.macros_dir or [])
+        args.filters_dir = config.get("filters_dirs", []) + (args.filters_dir or [])
         
         files = collect_files(args)
 
