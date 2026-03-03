@@ -105,6 +105,52 @@ def test_context_merger_warns_on_key_collision(caplog):
         context_merger([{"shared": "first", "a": 1}, {"shared": "second"}])
     assert any("shared" in msg for msg in caplog.messages)
 
+def test_build_context_priority_order(tmp_path):
+    """
+    build_context must apply sources in order: env file < --file-var < --var.
+    A key present in all three sources must resolve to the --var value.
+    """
+    from frender.main import build_context
+
+    env_file = tmp_path / "env.yaml"
+    env_file.write_text("key: from_env\nenv_only: present\n")
+
+    file_var_file = tmp_path / "raw.txt"
+    file_var_file.write_text("from_file_var")
+
+    result = build_context(
+        env_files=[str(env_file)],
+        file_var_args=[f"key={file_var_file}"],
+        var_args=["key=from_var"],
+    )
+
+    assert result["key"] == "from_var"       # --var wins
+    assert result["env_only"] == "present"   # env-only key survives
+
+
+def test_build_context_collision_warnings(tmp_path, caplog):
+    """
+    build_context must warn at each override boundary:
+    once when --file-var shadows an env key, once when --var shadows a key.
+    """
+    import logging
+    from frender.main import build_context
+
+    env_file = tmp_path / "env.yaml"
+    env_file.write_text("key: from_env\n")
+
+    file_var_file = tmp_path / "raw.txt"
+    file_var_file.write_text("from_file_var")
+
+    with caplog.at_level(logging.WARNING, logger="frender"):
+        build_context(
+            env_files=[str(env_file)],
+            file_var_args=[f"key={file_var_file}"],
+            var_args=["key=from_var"],
+        )
+
+    warning_messages = [m for m in caplog.messages if "key" in m]
+    assert len(warning_messages) == 2
 
 # ---------------------------
 # Variable Loaders

@@ -142,6 +142,27 @@ def context_merger(context: list[dict]) -> dict:
         merged_context |= d
     return merged_context
 
+def build_context(env_files: list, file_var_args: list, var_args: list) -> dict:
+    """
+    Assemble the final render context from all variable sources in priority order:
+    env files < --file-var < --var. Warns on any key collision across sources.
+    """
+    context = context_merger(load_context([Path(f) for f in env_files]))
+
+    file_vars = load_file_vars(file_var_args)
+    for key in file_vars:
+        if key in context:
+            logger.warning("[context] --file-var '%s' overrides key from env file", key)
+    context.update(file_vars)
+
+    cli_vars = load_vars(var_args)
+    for key in cli_vars:
+        if key in context:
+            logger.warning("[context] --var '%s' overrides previously set key", key)
+    context.update(cli_vars)
+
+    return context
+
 # ---------------------------
 # Rendering Helpers
 # ---------------------------
@@ -557,22 +578,7 @@ def main():
         if not args.output and not args.overwrite and len(files) > 1:
             parser.error("Rendering multiple files requires --overwrite or --output.")
 
-        context = load_context([Path(file) for file in args.env_file])
-        context = context_merger(context)
-        
-        # --file-var overrides
-        file_vars = load_file_vars(args.file_var)
-        for key in file_vars:
-            if key in context:
-                logger.warning("[context] --file-var '%s' overrides key from env file", key)
-        context.update(file_vars)
-
-        # --var overrides
-        cli_vars = load_vars(args.var)
-        for key in cli_vars:
-            if key in context:
-                logger.warning("[context] --var '%s' overrides previously set key", key)
-        context.update(cli_vars)
+        context = build_context(args.env_file, args.file_var, args.var)
 
         macro_dirs = [Path(p) for p in (args.macros_dir or [])]
         filter_dirs = [Path(p) for p in (args.filters_dir or [])]
