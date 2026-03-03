@@ -133,9 +133,12 @@ def load_file_vars(file_var_args):
 
     return file_vars
 
-def context_merger(context: list[dict]):
+def context_merger(context: list[dict]) -> dict:
     merged_context = {}
     for d in context:
+        for key in d:
+            if key in merged_context:
+                logger.warning("[context] Key '%s' from later env file overrides earlier value", key)
         merged_context |= d
     return merged_context
 
@@ -556,8 +559,21 @@ def main():
 
         context = load_context([Path(file) for file in args.env_file])
         context = context_merger(context)
-        context.update(load_file_vars(args.file_var))
-        context.update(load_vars(args.var))
+        
+        # --file-var overrides
+        file_vars = load_file_vars(args.file_var)
+        for key in file_vars:
+            if key in context:
+                logger.warning("[context] --file-var '%s' overrides key from env file", key)
+        context.update(file_vars)
+
+        # --var overrides
+        cli_vars = load_vars(args.var)
+        for key in cli_vars:
+            if key in context:
+                logger.warning("[context] --var '%s' overrides previously set key", key)
+        context.update(cli_vars)
+
         macro_dirs = [Path(p) for p in (args.macros_dir or [])]
         filter_dirs = [Path(p) for p in (args.filters_dir or [])]
 
